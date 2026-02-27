@@ -1,9 +1,58 @@
-.idea
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Project-specific
+logs/
+data/output/
+data/benchmarks/
+*.ply
+*.log
+
+# Large datasets (keep structure, ignore data)
+Datasets/
+
+# Documentation files (keep in repo if needed)
+# Uncomment to ignore PDFs
+# *.pdf
 CV Project Proposal.mov
 MultiView_3D_Reconstruction___Checkpoint_1.pdf
-Datasets
-venv
-logs
-data
 CV-Project Proposal.pdf
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+*.tmp
+*.bak
+.~*
