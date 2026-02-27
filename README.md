@@ -75,7 +75,7 @@ pip install -r requirements.txt
 Test SIFT feature detection and RANSAC verification:
 
 ```bash
-python test_phase1.py --images Datasets
+python test_phase1.py --images Datasets/dinoRing
 ```
 
 This will:
@@ -84,6 +84,22 @@ This will:
 - Match features between image pairs
 - Apply RANSAC verification to filter outliers
 - Generate visualization outputs in `data/output/`
+
+### Phase 2: Two-View Initialization and Triangulation
+
+Test two-view initialization and 3D point triangulation:
+
+```bash
+python test_phase2.py --images Datasets/dinoRing
+```
+
+This will:
+- Select the best image pair for initialization
+- Estimate camera intrinsics
+- Recover camera poses from fundamental matrix
+- Triangulate initial 3D points
+- Validate points using cheirality and reprojection error
+- Generate 3D visualization of cameras and points
 
 ### Full Pipeline (Coming Soon)
 
@@ -101,7 +117,7 @@ python run_sfm.py --images <image_dir> --output <output_dir>
 ## Implementation Phases
 
 - [x] **Phase 1**: Foundation (Feature detection, matching, RANSAC)
-- [ ] **Phase 2**: Two-view initialization
+- [x] **Phase 2**: Two-view initialization and triangulation
 - [ ] **Phase 3**: Incremental reconstruction and Bundle Adjustment
 - [ ] **Phase 4**: Densification and colorization
 - [ ] **Phase 5**: Validation and visualization
