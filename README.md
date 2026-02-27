@@ -101,6 +101,22 @@ This will:
 - Validate points using cheirality and reprojection error
 - Generate 3D visualization of cameras and points
 
+### Phase 3: Incremental Reconstruction and Bundle Adjustment
+
+Test incremental camera registration and global optimization:
+
+```bash
+python test_phase3.py --images Datasets/dinoRing --max-cameras 5
+```
+
+This will:
+- Initialize with two-view reconstruction
+- Register additional cameras using PnP (Perspective-n-Point)
+- Build sparse 3D reconstruction incrementally
+- Run Bundle Adjustment to optimize all cameras and points jointly
+- Visualize improvement in reprojection error
+- Display final multi-camera reconstruction
+
 ### Full Pipeline (Coming Soon)
 
 ```bash
@@ -118,7 +134,7 @@ python run_sfm.py --images <image_dir> --output <output_dir>
 
 - [x] **Phase 1**: Foundation (Feature detection, matching, RANSAC)
 - [x] **Phase 2**: Two-view initialization and triangulation
-- [ ] **Phase 3**: Incremental reconstruction and Bundle Adjustment
+- [x] **Phase 3**: Incremental reconstruction and Bundle Adjustment
 - [ ] **Phase 4**: Densification and colorization
 - [ ] **Phase 5**: Validation and visualization
 
