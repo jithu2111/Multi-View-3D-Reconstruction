@@ -56,3 +56,8 @@ htmlcov/
 *.tmp
 *.bak
 .~*
+
+src/__pycache__/
+src/features/__pycache__/
+src/geometry/__pycache__/
+src/utils/__pycache__/

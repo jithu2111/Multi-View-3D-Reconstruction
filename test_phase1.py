@@ -18,7 +18,7 @@ from src.geometry.ransac import RANSACVerifier
 from src.utils.logger import logger
 
 
-def test_phase1(image_dir: str = "Datasets"):
+def test_phase1(image_dir: str = "Datasets/dinoRing"):
     """
     Test Phase 1: Feature detection, matching, and RANSAC verification
 
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--images",
         type=str,
-        default="Datasets",
+        default="Datasets/dinoRing",
         help="Directory containing input images"
     )
 

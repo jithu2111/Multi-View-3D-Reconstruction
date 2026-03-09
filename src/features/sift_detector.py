@@ -130,6 +130,10 @@ class SIFTDetector:
             logger.warning(f"No descriptors found for images {idx1}, {idx2}")
             return self._create_empty_match(idx1, idx2)
 
+        if len(desc1) < 2 or len(desc2) < 2:
+            logger.warning(f"Too few descriptors ({len(desc1) if desc1 is not None else 0}, {len(desc2) if desc2 is not None else 0}) for images {idx1}, {idx2}")
+            return self._create_empty_match(idx1, idx2)
+
         # Match descriptors using KNN with k=2
         matches = self.matcher.knnMatch(desc1, desc2, k=2)
 

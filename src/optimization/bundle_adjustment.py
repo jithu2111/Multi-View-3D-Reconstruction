@@ -94,9 +94,15 @@ class BundleAdjuster:
 
         logger.info(f"Total observations: {n_observations}")
 
+        # Find camera closest to origin to fix (if requested)
+        fixed_cam_idx = 0
+        if fix_first_camera:
+            fixed_cam_idx = min(range(n_cameras), key=lambda i: np.linalg.norm(camera_poses[camera_indices[i]].t))
+            logger.info(f"Fixing camera {camera_indices[fixed_cam_idx]} (internal index {fixed_cam_idx}) at origin to remove gauge freedom")
+
         # Convert to parameter vector
         x0 = self._pack_parameters(
-            camera_poses, camera_indices, points_3d, K, fix_first_camera
+            camera_poses, camera_indices, points_3d, K, fix_first_camera, fixed_cam_idx
         )
 
         # Define bounds (optional - helps stability)
@@ -104,7 +110,7 @@ class BundleAdjuster:
 
         # Build sparsity structure for efficiency
         A = self._bundle_adjustment_sparsity(
-            n_cameras, n_points, observations, fix_first_camera
+            n_cameras, n_points, observations, fix_first_camera, fixed_cam_idx
         )
 
         # Optimize
@@ -119,7 +125,7 @@ class BundleAdjuster:
             max_nfev=self.max_nfev,
             loss=self.loss_function,
             verbose=0,
-            args=(n_cameras, n_points, observations, K, fix_first_camera)
+            args=(n_cameras, n_points, observations, K, fix_first_camera, fixed_cam_idx)
         )
 
         logger.info(f"Optimization complete: "
@@ -129,7 +135,7 @@ class BundleAdjuster:
 
         # Unpack optimized parameters
         optimized_poses, optimized_points, K_opt = self._unpack_parameters(
-            result.x, camera_indices, n_cameras, n_points, K, fix_first_camera
+            result.x, camera_indices, n_cameras, n_points, K, fix_first_camera, fixed_cam_idx
         )
 
         # Compute final reprojection error
@@ -145,21 +151,22 @@ class BundleAdjuster:
         camera_indices: List[int],
         points_3d: np.ndarray,
         K: np.ndarray,
-        fix_first_camera: bool = True
+        fix_first_camera: bool = True,
+        fixed_cam_idx: int = 0
     ) -> np.ndarray:
         """
         Pack camera poses and 3D points into parameter vector
 
-        Format: [cam1_params, cam2_params, ..., point0_xyz, point1_xyz, ..., intrinsics]
+        Format: [camA_params, camB_params, ..., point0_xyz, point1_xyz, ..., intrinsics]
         Camera params: [rvec (3), tvec (3)] = 6 parameters per camera
-        Note: If fix_first_camera=True, camera 0 is NOT included
+        Note: If fix_first_camera=True, the camera at fixed_cam_idx is NOT included
         """
         params = []
 
         # Pack camera parameters (rotation vector + translation)
-        # Skip first camera if fixing it
-        start_idx = 1 if fix_first_camera else 0
-        for i in range(start_idx, len(camera_indices)):
+        for i in range(len(camera_indices)):
+            if fix_first_camera and i == fixed_cam_idx:
+                continue
             img_idx = camera_indices[i]
             pose = camera_poses[img_idx]
             rvec, _ = cv2.Rodrigues(pose.R)
@@ -182,30 +189,27 @@ class BundleAdjuster:
         n_cameras: int,
         n_points: int,
         K_initial: np.ndarray,
-        fix_first_camera: bool
+        fix_first_camera: bool,
+        fixed_cam_idx: int
     ) -> Tuple[Dict[int, CameraPose], np.ndarray, np.ndarray]:
         """Unpack parameter vector into camera poses and 3D points"""
         camera_poses = {}
         offset = 0
 
         # Unpack camera parameters
-        if fix_first_camera:
-            # First camera is fixed at identity
-            camera_poses[camera_indices[0]] = CameraPose(
-                R=np.eye(3),
-                t=np.zeros(3)
-            )
-            start_cam = 1
-        else:
-            start_cam = 0
+        for i in range(n_cameras):
+            if fix_first_camera and i == fixed_cam_idx:
+                camera_poses[camera_indices[i]] = CameraPose(
+                    R=np.eye(3),
+                    t=np.zeros(3)
+                )
+            else:
+                rvec = params[offset:offset+3]
+                tvec = params[offset+3:offset+6]
+                offset += 6
 
-        for i in range(start_cam, n_cameras):
-            rvec = params[offset:offset+3]
-            tvec = params[offset+3:offset+6]
-            offset += 6
-
-            R, _ = cv2.Rodrigues(rvec)
-            camera_poses[camera_indices[i]] = CameraPose(R, tvec)
+                R, _ = cv2.Rodrigues(rvec)
+                camera_poses[camera_indices[i]] = CameraPose(R, tvec)
 
         # Unpack 3D points
         points_3d = params[offset:offset+n_points*3].reshape(n_points, 3)
@@ -227,7 +231,8 @@ class BundleAdjuster:
         n_points: int,
         observations: List[Tuple],
         K: np.ndarray,
-        fix_first_camera: bool
+        fix_first_camera: bool,
+        fixed_cam_idx: int
     ) -> np.ndarray:
         """
         Compute residuals (reprojection errors) for all observations
@@ -238,7 +243,7 @@ class BundleAdjuster:
         # Unpack parameters
         camera_indices = list(range(n_cameras))
         poses, points_3d, K_opt = self._unpack_parameters(
-            params, camera_indices, n_cameras, n_points, K, fix_first_camera
+            params, camera_indices, n_cameras, n_points, K, fix_first_camera, fixed_cam_idx
         )
 
         residuals = []
@@ -253,10 +258,8 @@ class BundleAdjuster:
 
             # Perspective projection
             x_proj = K_opt @ X_cam
-            if x_proj[2] > 0:  # Valid depth
-                x_proj = x_proj[:2] / x_proj[2]
-            else:
-                x_proj = np.array([0.0, 0.0])
+            depth = x_proj[2] if x_proj[2] > 1e-4 else 1e-4
+            x_proj = x_proj[:2] / depth
 
             # Residual
             residual = pt_2d - x_proj
@@ -269,7 +272,8 @@ class BundleAdjuster:
         n_cameras: int,
         n_points: int,
         observations: List[Tuple],
-        fix_first_camera: bool
+        fix_first_camera: bool,
+        fixed_cam_idx: int
     ) -> lil_matrix:
         """
         Build sparsity structure for Jacobian
@@ -282,7 +286,6 @@ class BundleAdjuster:
             Sparse matrix indicating which parameters affect each residual
         """
         n_params_per_camera = 6
-        camera_params_start = 0
         if fix_first_camera:
             n_camera_params = (n_cameras - 1) * n_params_per_camera
         else:
@@ -306,8 +309,10 @@ class BundleAdjuster:
 
             # Camera parameters
             if fix_first_camera:
-                if cam_idx > 0:
-                    cam_param_idx = (cam_idx - 1) * n_params_per_camera
+                if cam_idx != fixed_cam_idx:
+                    # Determine parameter index taking into account the skipped fixed camera
+                    effective_cam_idx = cam_idx if cam_idx < fixed_cam_idx else cam_idx - 1
+                    cam_param_idx = effective_cam_idx * n_params_per_camera
                     A[residual_idx:residual_idx+2, cam_param_idx:cam_param_idx+6] = 1
             else:
                 cam_param_idx = cam_idx * n_params_per_camera

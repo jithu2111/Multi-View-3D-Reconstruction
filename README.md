@@ -24,7 +24,9 @@ Traditional stereo vision is limited to:
 - **Bundle Adjustment**: Non-linear least squares optimization jointly refining 3D points and camera parameters
 
 ### Densification
-- Multi-View Stereo (MVS) to convert sparse point cloud to dense surface
+- Multi-View Stereo (MVS) using plane sweep stereo for depth map generation
+- Point cloud colorization from multi-view images with consistency weighting
+- PLY file export for visualization in standard 3D viewers
 
 ## Project Structure
 
@@ -39,13 +41,15 @@ Traditional stereo vision is limited to:
 │   │   └── triangulation.py
 │   ├── optimization/      # Bundle Adjustment
 │   │   └── bundle_adjustment.py
-│   ├── densification/     # Multi-View Stereo
-│   │   └── mvs.py
+│   ├── densification/     # Multi-View Stereo and colorization
+│   │   ├── mvs.py
+│   │   └── colorization.py
 │   ├── visualization/     # 3D visualization
 │   │   └── viewer.py
 │   └── utils/             # Utilities
 │       ├── logger.py
-│       └── image_loader.py
+│       ├── image_loader.py
+│       └── ply_export.py
 ├── data/
 │   ├── input/             # Input images
 │   ├── output/            # Output point clouds and visualizations
@@ -117,11 +121,35 @@ This will:
 - Visualize improvement in reprojection error
 - Display final multi-camera reconstruction
 
-### Full Pipeline (Coming Soon)
+### Phase 4: Densification and Colorization
+
+Test point cloud colorization and PLY export:
 
 ```bash
-python run_sfm.py --images <image_dir> --output <output_dir>
+python test_phase4.py --images Datasets/dinoRing --max-cameras 10
 ```
+
+This will:
+- Run complete sparse reconstruction pipeline (Phases 1-3)
+- Colorize 3D points using multi-view color consistency
+- Export colored point cloud to PLY format
+- Generate visualizations of colored reconstruction
+- Optionally: Run MVS densification with `--mvs` flag (slow)
+
+**Outputs:**
+- `phase4_reconstruction_points.ply` - Colored point cloud (viewable in MeshLab, CloudCompare)
+- `phase4_reconstruction_cameras.ply` - Camera frustums for visualization
+- `phase4_colored_reconstruction.png` - Matplotlib visualization
+
+### Full Pipeline
+
+For complete end-to-end reconstruction:
+
+```bash
+python test_phase4.py --images Datasets/dinoRing --max-cameras 20 --mvs
+```
+
+**Note:** MVS densification is computationally expensive. For faster results, omit the `--mvs` flag to export only the sparse colored point cloud.
 
 ## Expected Deliverables
 
@@ -135,8 +163,8 @@ python run_sfm.py --images <image_dir> --output <output_dir>
 - [x] **Phase 1**: Foundation (Feature detection, matching, RANSAC)
 - [x] **Phase 2**: Two-view initialization and triangulation
 - [x] **Phase 3**: Incremental reconstruction and Bundle Adjustment
-- [ ] **Phase 4**: Densification and colorization
-- [ ] **Phase 5**: Validation and visualization
+- [x] **Phase 4**: Densification and colorization
+- [ ] **Phase 5**: Validation and benchmarking
 
 ## Dependencies
 
