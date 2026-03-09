@@ -271,8 +271,67 @@ def _get_2d_3d_correspondences(camera_idx, reconstructor, all_matches, verified_
 
 def _triangulate_new_points(reconstructor, new_cam_idx, detector, all_matches, verified_matches, triangulator):
     """Triangulate new points visible in the new camera"""
-    # Simplified - in practice would triangulate with each registered camera
-    pass
+    # Get the pose of the newly registered camera
+    new_pose = reconstructor.get_camera_pose(new_cam_idx)
+    if new_pose is None:
+        return
+
+    points_added = 0
+    registered_cams = set(reconstructor.get_registered_camera_indices())
+    registered_cams.remove(new_cam_idx)
+
+    # Try to triangulate with each already registered camera
+    for reg_cam_idx in registered_cams:
+        pair = tuple(sorted([new_cam_idx, reg_cam_idx]))
+        if pair not in verified_matches:
+            continue
+
+        result = verified_matches[pair]
+        if result.n_inliers < 30:
+            continue
+
+        reg_pose = reconstructor.get_camera_pose(reg_cam_idx)
+        
+        # Determine point order based on the pair tuple
+        if pair[0] == new_cam_idx:
+            pts_new = result.inlier_points1
+            pts_reg = result.inlier_points2
+        else:
+            pts_new = result.inlier_points2
+            pts_reg = result.inlier_points1
+
+        # Create a temporary TwoViewReconstruction to use the Triangulator
+        from src.geometry.two_view import TwoViewReconstruction
+        temp_recon = TwoViewReconstruction(
+            img1_idx=new_cam_idx,
+            img2_idx=reg_cam_idx,
+            K=reconstructor.K,
+            pose1=new_pose,
+            pose2=reg_pose,
+            inlier_points1=pts_new,
+            inlier_points2=pts_reg,
+            F=np.eye(3),  # Not needed for triangulation
+            E=np.eye(3)   # Not needed for triangulation
+        )
+
+        # Triangulate
+        triangulated = triangulator.triangulate(temp_recon)
+        filtered = triangulator.filter_valid_points(triangulated)
+
+        if len(filtered.points_3d) > 0:
+            # Build observations list matching the expected format
+            observations = []
+            for i in range(len(filtered.points_3d)):
+                obs = {
+                    new_cam_idx: filtered.points_2d_img1[i],
+                    reg_cam_idx: filtered.points_2d_img2[i]
+                }
+                observations.append(obs)
+            
+            reconstructor.add_points(filtered.points_3d, observations)
+            points_added += len(filtered.points_3d)
+
+    logger.info(f"Triangulated {points_added} new points using camera {new_cam_idx}")
 
 
 def _compute_mean_reprojection_error(camera_poses, points_3d, point_observations, K):

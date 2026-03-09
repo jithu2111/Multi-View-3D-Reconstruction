@@ -224,15 +224,19 @@ class TwoViewInitializer:
         E = K.T @ F @ K
 
         # Recover camera poses from essential matrix
-        pose1, pose2 = self._recover_pose(
+        pose1, pose2, mask = self._recover_pose(
             E,
             ransac_result.inlier_points1,
             ransac_result.inlier_points2,
             K
         )
+        
+        # Filter points that failed cheirality check during pose recovery
+        inlier_points1 = ransac_result.inlier_points1[mask]
+        inlier_points2 = ransac_result.inlier_points2[mask]
 
         logger.info(f"Successfully initialized two-view reconstruction with "
-                   f"{ransac_result.n_inliers} inliers")
+                   f"{len(inlier_points1)} valid pose inliers")
 
         return TwoViewReconstruction(
             img1_idx=match.img1_idx,
@@ -240,8 +244,8 @@ class TwoViewInitializer:
             K=K,
             pose1=pose1,
             pose2=pose2,
-            inlier_points1=ransac_result.inlier_points1,
-            inlier_points2=ransac_result.inlier_points2,
+            inlier_points1=inlier_points1,
+            inlier_points2=inlier_points2,
             F=F,
             E=E
         )
@@ -252,7 +256,7 @@ class TwoViewInitializer:
         pts1: np.ndarray,
         pts2: np.ndarray,
         K: np.ndarray
-    ) -> Tuple[CameraPose, CameraPose]:
+    ) -> Tuple[CameraPose, CameraPose, np.ndarray]:
         """
         Recover camera poses from essential matrix
 
@@ -263,7 +267,7 @@ class TwoViewInitializer:
             K: 3x3 camera intrinsic matrix
 
         Returns:
-            Tuple of (pose1, pose2) where pose1 is at origin
+            Tuple of (pose1, pose2, mask) where pose1 is at origin and mask is the inlier mask
         """
         # First camera at origin
         R1 = np.eye(3)
@@ -280,7 +284,7 @@ class TwoViewInitializer:
         logger.debug(f"Recovered pose: R2 determinant = {np.linalg.det(R2):.6f}")
         logger.debug(f"Recovered pose: t2 = {t2.ravel()}")
 
-        return pose1, pose2
+        return pose1, pose2, mask.ravel().astype(bool)
 
     def compute_baseline(self, pose2: CameraPose) -> float:
         """

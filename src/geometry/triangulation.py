@@ -85,7 +85,10 @@ class Triangulator:
         points_4d = cv2.triangulatePoints(P1, P2, pts1.T, pts2.T)
 
         # Convert from homogeneous to 3D coordinates
-        points_3d = points_4d[:3, :] / points_4d[3, :]
+        w = points_4d[3, :]
+        # Prevent division by zero for points at infinity
+        w_safe = np.where(np.abs(w) < 1e-7, 1e-7 * np.sign(w + 1e-10), w)
+        points_3d = points_4d[:3, :] / w_safe
         points_3d = points_3d.T  # Nx3
 
         # Validate triangulated points
