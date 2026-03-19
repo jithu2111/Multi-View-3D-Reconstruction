@@ -187,18 +187,23 @@ class PlaneSweepStereo:
         # Sample source image at projected locations
         src_sampled = self._bilinear_sample(src_image, src_pixels)
 
-        # Compute photometric cost (L1 distance)
+        # Compute per-pixel L1 cost, then aggregate with a box filter (NCC-like
+        # patch comparison is better but much slower; windowed L1 is a good trade-off)
         ref_flat = ref_image.reshape(-1, 3).astype(np.float32)
-        cost = np.mean(np.abs(ref_flat - src_sampled), axis=1)
-        cost = cost.reshape(h, w)
+        cost_per_pixel = np.mean(np.abs(ref_flat - src_sampled), axis=1)
+        cost = cost_per_pixel.reshape(h, w)
 
-        # Handle invalid projections (outside image bounds)
+        # Handle invalid projections (outside image bounds) before filtering
         invalid_mask = (src_pixels[:, 0] < 0) | (src_pixels[:, 0] >= w-1) | \
                       (src_pixels[:, 1] < 0) | (src_pixels[:, 1] >= h-1)
-        cost_reshaped = cost.copy()
-        cost_reshaped.ravel()[invalid_mask] = 255.0  # High cost for invalid
+        cost.ravel()[invalid_mask] = 255.0  # High cost for invalid
 
-        return cost_reshaped
+        # Aggregate cost over a local window using box filter — smooths out
+        # pixel-level noise and gives patch-level matching robustness
+        kernel_size = self.window_size
+        cost = cv2.boxFilter(cost, ddepth=-1, ksize=(kernel_size, kernel_size))
+
+        return cost
 
     def _backproject_to_depth(
         self,
