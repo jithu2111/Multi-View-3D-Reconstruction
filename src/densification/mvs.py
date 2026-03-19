@@ -367,19 +367,18 @@ class MVSDensifier:
         """
         logger.info(f"Starting MVS densification with {len(camera_poses)} views")
 
-        # Compute depth range from sparse points
-        depth_range = self._estimate_depth_range(sparse_points, camera_poses)
-        logger.info(f"Estimated depth range: [{depth_range[0]:.2f}, {depth_range[1]:.2f}]")
-
         # Compute depth maps for each view
         depth_maps = []
         camera_indices = sorted(camera_poses.keys())
 
         for ref_idx in camera_indices:
-            logger.info(f"Computing depth map for camera {ref_idx}...")
-
             ref_image = images[ref_idx]
             ref_pose = camera_poses[ref_idx]
+
+            # Compute per-view depth range (each camera sees the scene at different depths)
+            depth_range = self._estimate_depth_range(sparse_points, ref_pose)
+            logger.info(f"Computing depth map for camera {ref_idx} "
+                       f"(depth range: [{depth_range[0]:.2f}, {depth_range[1]:.2f}])...")
 
             # Select source views (all other cameras)
             src_indices = [i for i in camera_indices if i != ref_idx]
@@ -412,20 +411,17 @@ class MVSDensifier:
     def _estimate_depth_range(
         self,
         sparse_points: Optional[np.ndarray],
-        camera_poses: Dict[int, CameraPose]
+        pose: CameraPose
     ) -> Tuple[float, float]:
-        """Estimate depth range from sparse points and camera positions"""
+        """Estimate depth range from sparse points for a specific camera view"""
         if sparse_points is None or len(sparse_points) == 0:
             return (0.1, 10.0)  # Default range
 
-        # Compute z-depths from first camera (depth along optical axis)
-        first_pose = list(camera_poses.values())[0]
-
-        # Transform points to camera coordinates; z-depth is the Z component
-        points_cam = (first_pose.R @ sparse_points.T).T + first_pose.t
+        # Transform points to this camera's coordinate frame; z-depth is the Z component
+        points_cam = (pose.R @ sparse_points.T).T + pose.t
         depths = points_cam[:, 2]
 
-        # Only consider points in front of the camera
+        # Only consider points in front of this camera
         depths = depths[depths > 0]
         if len(depths) == 0:
             return (0.1, 10.0)
