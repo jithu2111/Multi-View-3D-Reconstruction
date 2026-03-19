@@ -226,10 +226,9 @@ class PlaneSweepStereo:
         K_inv = np.linalg.inv(K)
         rays_cam_unnorm = (K_inv @ pixels_hom.T).T  # Nx3
 
-        # Normalize rays to unit length because depth represents Euclidean distance
-        # from the camera center (consistent with _estimate_depth_range and _depth_map_to_points)
-        rays_cam = rays_cam_unnorm / np.linalg.norm(rays_cam_unnorm, axis=1, keepdims=True)
-        points_cam = rays_cam * depth  # Nx3
+        # Scale rays so that z-component equals depth (plane sweep uses z-depth,
+        # not Euclidean distance, to avoid barrel distortion at image edges)
+        points_cam = rays_cam_unnorm * (depth / rays_cam_unnorm[:, 2:3])  # Nx3
 
         # Transform to world space
         R_inv = pose.R.T
@@ -419,12 +418,17 @@ class MVSDensifier:
         if sparse_points is None or len(sparse_points) == 0:
             return (0.1, 10.0)  # Default range
 
-        # Compute depths from first camera
+        # Compute z-depths from first camera (depth along optical axis)
         first_pose = list(camera_poses.values())[0]
-        C = -first_pose.R.T @ first_pose.t
 
-        # Depths are distances from camera center
-        depths = np.linalg.norm(sparse_points - C, axis=1)
+        # Transform points to camera coordinates; z-depth is the Z component
+        points_cam = (first_pose.R @ sparse_points.T).T + first_pose.t
+        depths = points_cam[:, 2]
+
+        # Only consider points in front of the camera
+        depths = depths[depths > 0]
+        if len(depths) == 0:
+            return (0.1, 10.0)
 
         # Use percentiles to avoid outliers
         min_depth = max(0.1, np.percentile(depths, 5))
@@ -499,16 +503,13 @@ class MVSDensifier:
         pixels = np.stack([x_coords, y_coords], axis=1)
         depths = depth_map.depth[valid_mask]
 
-        # Backproject to 3D
+        # Backproject to 3D using z-depth (depth along optical axis)
         pixels_hom = np.hstack([pixels, np.ones((len(pixels), 1))])
         K_inv = np.linalg.inv(K)
         rays_cam_unnorm = (K_inv @ pixels_hom.T).T
-        
-        # Normalize rays to unit length because depth represents Euclidean distance
-        # from the camera center (as modeled by _estimate_depth_range)
-        rays_cam = rays_cam_unnorm / np.linalg.norm(rays_cam_unnorm, axis=1, keepdims=True)
-        
-        points_cam = rays_cam * depths[:, np.newaxis]
+
+        # Scale rays so that z-component equals depth (consistent with plane sweep)
+        points_cam = rays_cam_unnorm * (depths[:, np.newaxis] / rays_cam_unnorm[:, 2:3])
 
         # Transform to world space
         R_inv = pose.R.T
