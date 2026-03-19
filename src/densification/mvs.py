@@ -224,7 +224,11 @@ class PlaneSweepStereo:
 
         # Backproject to camera space
         K_inv = np.linalg.inv(K)
-        rays_cam = (K_inv @ pixels_hom.T).T  # Nx3
+        rays_cam_unnorm = (K_inv @ pixels_hom.T).T  # Nx3
+
+        # Normalize rays to unit length because depth represents Euclidean distance
+        # from the camera center (consistent with _estimate_depth_range and _depth_map_to_points)
+        rays_cam = rays_cam_unnorm / np.linalg.norm(rays_cam_unnorm, axis=1, keepdims=True)
         points_cam = rays_cam * depth  # Nx3
 
         # Transform to world space
@@ -498,7 +502,12 @@ class MVSDensifier:
         # Backproject to 3D
         pixels_hom = np.hstack([pixels, np.ones((len(pixels), 1))])
         K_inv = np.linalg.inv(K)
-        rays_cam = (K_inv @ pixels_hom.T).T
+        rays_cam_unnorm = (K_inv @ pixels_hom.T).T
+        
+        # Normalize rays to unit length because depth represents Euclidean distance
+        # from the camera center (as modeled by _estimate_depth_range)
+        rays_cam = rays_cam_unnorm / np.linalg.norm(rays_cam_unnorm, axis=1, keepdims=True)
+        
         points_cam = rays_cam * depths[:, np.newaxis]
 
         # Transform to world space

@@ -24,6 +24,7 @@ from src.densification import MVSDensifier, colorize_sparse_points
 from src.utils.ply_export import export_reconstruction_to_ply
 from src.visualization.mesh_reconstruction import MeshReconstructor
 from src.utils.logger import logger
+from src.utils.calibration_loader import try_load_intrinsics
 
 
 def test_phase4(
@@ -61,6 +62,15 @@ def test_phase4(
         logger.error("Need at least 3 images for reconstruction")
         return
 
+    # Subsample images for large datasets to keep matching tractable
+    # (312 images = 48K pairs, which is way too slow)
+    max_images = max(max_cameras * 2, 20)  # At least 2x cameras, minimum 20
+    if len(images) > max_images:
+        step = len(images) / max_images
+        indices = [int(i * step) for i in range(max_images)]
+        images = [images[i] for i in indices]
+        logger.info(f"Subsampled to {len(images)} images (step={step:.1f}) for tractable matching")
+
     image_shape = images[0].shape[:2]
 
     # Detect SIFT features
@@ -68,32 +78,76 @@ def test_phase4(
     detector = SIFTDetector(n_features=2000, ratio_threshold=0.75)
     detector.detect_and_compute(images)
 
-    # Match and verify
+    # Try to load ground-truth intrinsics from calibration file
+    known_K = try_load_intrinsics(image_dir)
+    if known_K is not None:
+        logger.info("Using ground-truth camera intrinsics from calibration file")
+    else:
+        logger.info("No calibration file found, using heuristic focal length estimation")
+
+    # Match and verify — use Essential matrix RANSAC when K is known (much more accurate)
     logger.info("\n[3/9] Matching and verifying features...")
     all_matches = detector.match_all_pairs()
-    verifier = RANSACVerifier(
-        method='fundamental',
-        ransac_threshold=1.0,
-        min_inliers=50
-    )
-    verified_matches = verifier.verify_all_matches(all_matches)
+    if known_K is not None:
+        verifier = RANSACVerifier(
+            method='essential',
+            ransac_threshold=1.0,
+            min_inliers=50
+        )
+        verified_matches = verifier.verify_all_matches(all_matches, camera_matrix=known_K)
+    else:
+        verifier = RANSACVerifier(
+            method='fundamental',
+            ransac_threshold=1.0,
+            min_inliers=50
+        )
+        verified_matches = verifier.verify_all_matches(all_matches)
 
-    # Two-view initialization
+    # Two-view initialization with auto-detected intrinsics
     logger.info("\n[4/9] Two-view initialization...")
-    initializer = TwoViewInitializer()
-    img1_idx, img2_idx = initializer.select_initial_pair(
-        all_matches, verified_matches, image_shape
-    )
 
-    match = all_matches[(img1_idx, img2_idx)]
-    ransac_result = verified_matches[(img1_idx, img2_idx)]
-    reconstruction = initializer.initialize_reconstruction(
-        match, ransac_result, image_shape
-    )
-
+    initializer = TwoViewInitializer(known_K=known_K)
     triangulator = Triangulator(min_parallax=1.0, max_reproj_error=4.0)
-    triangulated = triangulator.triangulate(reconstruction)
-    triangulated = triangulator.filter_valid_points(triangulated)
+
+    # Rank all candidate pairs and try them in order until one produces valid points
+    candidate_pairs = []
+    for pair, ransac_result in verified_matches.items():
+        if ransac_result.n_inliers >= 100:
+            match = all_matches[pair]
+            score = initializer._score_image_pair(match, ransac_result, image_shape)
+            candidate_pairs.append((score, pair))
+    candidate_pairs.sort(reverse=True)  # Best score first
+
+    if not candidate_pairs:
+        logger.error("No valid image pairs found for initialization")
+        return
+
+    reconstruction = None
+    triangulated = None
+    img1_idx, img2_idx = None, None
+
+    for rank, (score, pair) in enumerate(candidate_pairs[:10]):  # Try top 10 pairs
+        try:
+            match = all_matches[pair]
+            ransac_result = verified_matches[pair]
+            recon = initializer.initialize_reconstruction(match, ransac_result, image_shape)
+            tri = triangulator.triangulate(recon)
+            tri = triangulator.filter_valid_points(tri)
+
+            if len(tri.points_3d) >= 20:
+                reconstruction = recon
+                triangulated = tri
+                img1_idx, img2_idx = pair
+                logger.info(f"Pair {pair} (rank {rank+1}, score {score:.1f}): {len(tri.points_3d)} points ✓")
+                break
+            else:
+                logger.warning(f"Pair {pair} (rank {rank+1}, score {score:.1f}): only {len(tri.points_3d)} points, trying next...")
+        except Exception as e:
+            logger.warning(f"Pair {pair} (rank {rank+1}) failed: {e}, trying next...")
+
+    if reconstruction is None or triangulated is None:
+        logger.error("All candidate initial pairs failed to produce valid triangulation")
+        return
 
     logger.info(f"Initial reconstruction: {len(triangulated.points_3d)} points")
 
@@ -136,6 +190,7 @@ def test_phase4(
         if pnp_result.success:
             registered_order.append(best_camera)
             logger.info(f"Registered camera {best_camera}")
+            _triangulate_new_points(reconstructor, best_camera, detector, all_matches, verified_matches, triangulator)
 
     n_cams, n_pts = reconstructor.get_reconstruction_size()
     logger.info(f"Sparse reconstruction: {n_cams} cameras, {n_pts} points")
@@ -161,6 +216,9 @@ def test_phase4(
     # Update reconstructor
     reconstructor.registered_cameras = optimized_poses
     reconstructor.points_3d = optimized_points
+
+    # Filter outlier points after BA (points with high reprojection error drift)
+    _filter_outlier_points(reconstructor)
 
     # =========================================================================
     # Step 8: Colorization
@@ -297,35 +355,290 @@ def test_phase4(
     logger.info(f"  - phase4_colored_reconstruction.png (visualization)")
 
 
+def _filter_outlier_points(reconstructor, std_ratio=2.5):
+    """Remove statistical outlier points from the reconstruction"""
+    from scipy.spatial import cKDTree
+
+    points = reconstructor.points_3d
+    if len(points) < 20:
+        return
+
+    # Use KD-tree for nearest neighbor distances
+    tree = cKDTree(points)
+    k = min(10, len(points) - 1)
+    distances, _ = tree.query(points, k=k + 1)
+    mean_distances = distances[:, 1:].mean(axis=1)  # Exclude self
+
+    # Statistical filtering
+    global_mean = mean_distances.mean()
+    global_std = mean_distances.std()
+    threshold = global_mean + std_ratio * global_std
+    inlier_mask = mean_distances < threshold
+
+    n_removed = len(points) - np.sum(inlier_mask)
+    if n_removed > 0:
+        logger.info(f"Removed {n_removed} outlier points ({n_removed/len(points)*100:.1f}%)")
+        reconstructor.points_3d = points[inlier_mask]
+        reconstructor.point_observations = [
+            obs for obs, keep in zip(reconstructor.point_observations, inlier_mask) if keep
+        ]
+
+
+def _triangulate_new_points(reconstructor, new_cam_idx, detector, all_matches, verified_matches, triangulator):
+    """Triangulate new points visible in the new camera with duplicate detection"""
+    new_pose = reconstructor.get_camera_pose(new_cam_idx)
+    if new_pose is None:
+        return
+
+    points_added = 0
+    duplicates_filtered = 0
+    registered_cams = set(reconstructor.get_registered_camera_indices())
+    registered_cams.remove(new_cam_idx)
+
+    # Build KD-tree for existing points to detect duplicates
+    from scipy.spatial import cKDTree
+    existing_points = reconstructor.points_3d
+    kdtree = None
+    if len(existing_points) > 0:
+        kdtree = cKDTree(existing_points)
+
+    for reg_cam_idx in registered_cams:
+        pair = tuple(sorted([new_cam_idx, reg_cam_idx]))
+        if pair not in verified_matches:
+            continue
+
+        result = verified_matches[pair]
+        if result.n_inliers < 30:
+            continue
+
+        reg_pose = reconstructor.get_camera_pose(reg_cam_idx)
+
+        if pair[0] == new_cam_idx:
+            pts_new = result.inlier_points1
+            pts_reg = result.inlier_points2
+        else:
+            pts_new = result.inlier_points2
+            pts_reg = result.inlier_points1
+
+        from src.geometry.two_view import TwoViewReconstruction
+        temp_recon = TwoViewReconstruction(
+            img1_idx=new_cam_idx,
+            img2_idx=reg_cam_idx,
+            K=reconstructor.K,
+            pose1=new_pose,
+            pose2=reg_pose,
+            inlier_points1=pts_new,
+            inlier_points2=pts_reg,
+            F=np.eye(3),
+            E=np.eye(3)
+        )
+
+        triangulated = triangulator.triangulate(temp_recon)
+        filtered = triangulator.filter_valid_points(triangulated)
+
+        if len(filtered.points_3d) > 0:
+            # Filter out duplicate points
+            new_points = []
+            new_observations = []
+
+            for i in range(len(filtered.points_3d)):
+                point_3d = filtered.points_3d[i]
+
+                # Check if this point is too close to existing points
+                is_duplicate = False
+                if kdtree is not None:
+                    # Search for nearby points (adaptive threshold based on scene scale)
+                    scene_scale = np.ptp(existing_points, axis=0).max() if len(existing_points) > 1 else 1.0
+                    dup_threshold = max(0.001, scene_scale * 0.002)  # 0.2% of scene size
+                    distances, indices = kdtree.query(point_3d, k=1, distance_upper_bound=dup_threshold)
+                    if distances < dup_threshold:  # Point already exists
+                        is_duplicate = True
+                        duplicates_filtered += 1
+
+                if not is_duplicate:
+                    new_points.append(point_3d)
+                    # Start with the two cameras used for triangulation
+                    obs = {
+                        new_cam_idx: filtered.points_2d_img1[i],
+                        reg_cam_idx: filtered.points_2d_img2[i]
+                    }
+                    new_observations.append(obs)
+
+            # Add non-duplicate points and link multi-view observations
+            if len(new_points) > 0:
+                # First add the points with their initial observations
+                start_idx = len(reconstructor.points_3d)
+                reconstructor.add_points(np.array(new_points), new_observations)
+
+                # Now search for additional observations in other registered cameras
+                _link_multiview_observations(
+                    reconstructor, new_cam_idx, reg_cam_idx,
+                    start_idx, np.array(new_points), all_matches, verified_matches
+                )
+
+                points_added += len(new_points)
+
+                # Update KD-tree with new points for subsequent iterations
+                if kdtree is not None:
+                    existing_points = np.vstack([existing_points, new_points])
+                else:
+                    existing_points = np.array(new_points)
+                kdtree = cKDTree(existing_points)
+
+    logger.info(f"Triangulated {points_added} new points using camera {new_cam_idx} "
+                f"({duplicates_filtered} duplicates filtered)")
+
+
+def _link_multiview_observations(
+    reconstructor, cam1_idx, cam2_idx, start_point_idx, new_points, all_matches, verified_matches
+):
+    """
+    Link newly triangulated points to observations in other registered cameras
+
+    For each newly added 3D point, project it to all other registered cameras
+    and check if there's a matching feature observation. This gives Bundle Adjustment
+    more complete information about which cameras see which points.
+    """
+    registered_cams = set(reconstructor.get_registered_camera_indices())
+    # Remove the two cameras already used for triangulation
+    other_cams = registered_cams - {cam1_idx, cam2_idx}
+
+    if len(other_cams) == 0:
+        return
+
+    n_observations_added = 0
+    max_reproj_error = 3.0  # pixels
+
+    for other_cam_idx in other_cams:
+        other_pose = reconstructor.get_camera_pose(other_cam_idx)
+
+        # Check matches with cam1
+        pair1 = tuple(sorted([cam1_idx, other_cam_idx]))
+        if pair1 not in verified_matches:
+            continue
+
+        result1 = verified_matches[pair1]
+        if result1.n_inliers < 20:
+            continue
+
+        # Get the correct point arrays based on ordering
+        if pair1[0] == cam1_idx:
+            pts_cam1 = result1.inlier_points1
+            pts_other = result1.inlier_points2
+        else:
+            pts_cam1 = result1.inlier_points2
+            pts_other = result1.inlier_points1
+
+        # Project new 3D points to the other camera
+        P_other = other_pose.to_projection_matrix(reconstructor.K)
+        points_hom = np.hstack([new_points, np.ones((len(new_points), 1))])
+        projected = (P_other @ points_hom.T).T
+        projected_2d = projected[:, :2] / projected[:, 2:3]
+
+        # For each projected point, find if there's a matching observation
+        for i, proj_pt in enumerate(projected_2d):
+            point_idx = start_point_idx + i
+
+            # Get the cam1 observation for this point
+            cam1_obs = reconstructor.point_observations[point_idx].get(cam1_idx)
+            if cam1_obs is None:
+                continue
+
+            # Find the closest match in pts_cam1 to cam1_obs
+            dists = np.linalg.norm(pts_cam1 - cam1_obs, axis=1)
+            min_idx = np.argmin(dists)
+
+            if dists[min_idx] < 2.0:  # Found corresponding feature
+                # Check if projection is close to the matched feature
+                matched_pt_other = pts_other[min_idx]
+                reproj_error = np.linalg.norm(proj_pt - matched_pt_other)
+
+                if reproj_error < max_reproj_error:
+                    # Add this observation
+                    reconstructor.point_observations[point_idx][other_cam_idx] = matched_pt_other
+                    n_observations_added += 1
+
+    if n_observations_added > 0:
+        logger.info(f"  Linked {n_observations_added} additional observations in other cameras")
+
+
 def _find_next_camera(reconstructor, all_matches, verified_matches, detector, n_images):
-    """Find the next best camera to register"""
+    """Find the next best camera to register based on geometric quality"""
     registered = set(reconstructor.get_registered_camera_indices())
     unregistered = set(range(n_images)) - registered
+
+    # Get camera centers for baseline computation
+    camera_centers = {}
+    for cam_idx in registered:
+        pose = reconstructor.get_camera_pose(cam_idx)
+        C = -pose.R.T @ pose.t
+        camera_centers[cam_idx] = C
+
+    # Compute mean camera center for diversity scoring
+    if len(camera_centers) > 0:
+        mean_center = np.mean(list(camera_centers.values()), axis=0)
+    else:
+        mean_center = np.zeros(3)
 
     best_camera = None
     best_score = 0
 
     for cam_idx in unregistered:
         n_matches = 0
+        total_baseline = 0
+        n_pairs = 0
+
         for reg_idx in registered:
             pair = tuple(sorted([cam_idx, reg_idx]))
             if pair in verified_matches:
                 result = verified_matches[pair]
                 n_matches += result.n_inliers
 
-        if n_matches > best_score:
-            best_score = n_matches
+                # Estimate baseline using triangulated points if available
+                # (Approximation: use mean point cloud distance)
+                if len(reconstructor.points_3d) > 0:
+                    # Compute average distance to existing 3D points
+                    mean_point = np.mean(reconstructor.points_3d, axis=0)
+                    reg_center = camera_centers[reg_idx]
+                    baseline = np.linalg.norm(mean_point - reg_center)
+                    total_baseline += baseline
+                    n_pairs += 1
+
+        if n_pairs > 0:
+            avg_baseline = total_baseline / n_pairs
+        else:
+            avg_baseline = 1.0  # Default if no baseline estimate
+
+        # Score combines:
+        # 1. Number of matches (more is better)
+        # 2. Average baseline (larger baseline = better geometry)
+        # Weight matches more heavily, but use baseline as a tiebreaker
+        score = n_matches * (1.0 + 0.1 * avg_baseline)
+
+        if score > best_score:
+            best_score = score
             best_camera = cam_idx
 
     return best_camera
 
 
 def _get_2d_3d_correspondences(camera_idx, reconstructor, all_matches, verified_matches):
-    """Get 2D-3D correspondences for a camera"""
+    """Get 2D-3D correspondences for a camera using spatial lookup"""
     points_2d_list = []
     point_indices_list = []
 
     registered = reconstructor.get_registered_camera_indices()
+
+    # Build spatial lookup structure for all registered cameras
+    # Maps (camera_idx, discretized_x, discretized_y) -> list of point indices
+    from collections import defaultdict
+    point_lookup = defaultdict(list)
+
+    for pt_idx, obs in enumerate(reconstructor.point_observations):
+        for cam_idx, pixel in obs.items():
+            # Discretize to integer pixels for lookup
+            key = (cam_idx, int(np.round(pixel[0])), int(np.round(pixel[1])))
+            point_lookup[key].append(pt_idx)
 
     for reg_idx in registered:
         pair = tuple(sorted([camera_idx, reg_idx]))
@@ -336,8 +649,6 @@ def _get_2d_3d_correspondences(camera_idx, reconstructor, all_matches, verified_
         if result.n_inliers < 20:
             continue
 
-        match = all_matches[pair]
-
         if pair[0] == camera_idx:
             pts_cam = result.inlier_points1
             pts_reg = result.inlier_points2
@@ -345,14 +656,25 @@ def _get_2d_3d_correspondences(camera_idx, reconstructor, all_matches, verified_
             pts_cam = result.inlier_points2
             pts_reg = result.inlier_points1
 
-        for i, (pt_cam, pt_reg) in enumerate(zip(pts_cam, pts_reg)):
-            for pt_idx, obs in enumerate(reconstructor.point_observations):
-                if reg_idx in obs:
-                    obs_pt = obs[reg_idx]
-                    if np.linalg.norm(obs_pt - pt_reg) < 1.0:
+        # Match each correspondence to existing 3D points
+        for pt_cam, pt_reg in zip(pts_cam, pts_reg):
+            # Search in a 2x2 pixel window around the registered camera point
+            x_base = int(np.round(pt_reg[0]))
+            y_base = int(np.round(pt_reg[1]))
+
+            matched = False
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    key = (reg_idx, x_base + dx, y_base + dy)
+                    if key in point_lookup:
+                        # Use the first match found (closest to discretized location)
+                        pt_idx = point_lookup[key][0]
                         points_2d_list.append(pt_cam)
                         point_indices_list.append(pt_idx)
+                        matched = True
                         break
+                if matched:
+                    break
 
     if len(points_2d_list) == 0:
         return np.empty((0, 2)), np.empty(0, dtype=int)

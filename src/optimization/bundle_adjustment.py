@@ -94,11 +94,17 @@ class BundleAdjuster:
 
         logger.info(f"Total observations: {n_observations}")
 
+        if n_observations == 0 or n_points == 0:
+            logger.warning("No observations/points for bundle adjustment, skipping optimization")
+            return camera_poses, points_3d, K.copy(), 0.0
+
         # Find camera closest to origin to fix (if requested)
         fixed_cam_idx = 0
         if fix_first_camera:
             fixed_cam_idx = min(range(n_cameras), key=lambda i: np.linalg.norm(camera_poses[camera_indices[i]].t))
-            logger.info(f"Fixing camera {camera_indices[fixed_cam_idx]} (internal index {fixed_cam_idx}) at origin to remove gauge freedom")
+            # Store the actual pose of the fixed camera so we can restore it correctly
+            self._fixed_camera_pose = camera_poses[camera_indices[fixed_cam_idx]]
+            logger.info(f"Fixing camera {camera_indices[fixed_cam_idx]} (internal index {fixed_cam_idx}) to remove gauge freedom")
 
         # Convert to parameter vector
         x0 = self._pack_parameters(
@@ -199,10 +205,8 @@ class BundleAdjuster:
         # Unpack camera parameters
         for i in range(n_cameras):
             if fix_first_camera and i == fixed_cam_idx:
-                camera_poses[camera_indices[i]] = CameraPose(
-                    R=np.eye(3),
-                    t=np.zeros(3)
-                )
+                # Restore the actual pose of the fixed camera (not always identity)
+                camera_poses[camera_indices[i]] = self._fixed_camera_pose
             else:
                 rvec = params[offset:offset+3]
                 tvec = params[offset+3:offset+6]

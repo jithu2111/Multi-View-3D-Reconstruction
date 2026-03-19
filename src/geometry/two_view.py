@@ -62,6 +62,7 @@ class TwoViewInitializer:
     def __init__(
         self,
         focal_length: Optional[float] = None,
+        known_K: Optional[np.ndarray] = None,
         min_baseline_ratio: float = 0.1,
         min_triangulation_angle: float = 2.0
     ):
@@ -70,16 +71,22 @@ class TwoViewInitializer:
 
         Args:
             focal_length: Focal length in pixels (if None, will be estimated)
+            known_K: Known 3x3 camera intrinsic matrix (overrides focal_length and estimation)
             min_baseline_ratio: Minimum baseline/scene_depth ratio for valid pair
             min_triangulation_angle: Minimum angle (degrees) for valid triangulation
         """
         self.focal_length = focal_length
+        self.known_K = known_K
         self.min_baseline_ratio = min_baseline_ratio
         self.min_triangulation_angle = min_triangulation_angle
 
-        logger.info(f"Initialized TwoViewInitializer: "
-                   f"focal_length={focal_length}, "
-                   f"min_baseline_ratio={min_baseline_ratio}")
+        if known_K is not None:
+            logger.info(f"Initialized TwoViewInitializer with known intrinsics: "
+                       f"fx={known_K[0,0]:.1f}, fy={known_K[1,1]:.1f}")
+        else:
+            logger.info(f"Initialized TwoViewInitializer: "
+                       f"focal_length={focal_length}, "
+                       f"min_baseline_ratio={min_baseline_ratio}")
 
     def select_initial_pair(
         self,
@@ -214,14 +221,25 @@ class TwoViewInitializer:
         logger.info(f"Initializing reconstruction from images "
                    f"{match.img1_idx} and {match.img2_idx}")
 
-        # Estimate camera intrinsics
-        K = self.estimate_camera_intrinsics(image_shape)
+        # Use known intrinsics if available, otherwise estimate
+        if self.known_K is not None:
+            K = self.known_K.copy()
+            logger.info(f"Using known camera intrinsics: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
+        else:
+            K = self.estimate_camera_intrinsics(image_shape)
 
-        # Get fundamental matrix from RANSAC
-        F = ransac_result.matrix
-
-        # Compute essential matrix: E = K^T * F * K
-        E = K.T @ F @ K
+        # Get the geometric matrix from RANSAC
+        # When RANSAC used 'essential' method, the matrix IS the Essential matrix directly
+        # When RANSAC used 'fundamental' method, we need to convert F -> E
+        if self.known_K is not None:
+            # RANSAC estimated E directly using calibrated points — use it as-is
+            E = ransac_result.matrix
+            F = np.eye(3)  # Placeholder (not used downstream)
+            logger.info("Using Essential matrix directly from calibrated RANSAC")
+        else:
+            F = ransac_result.matrix
+            # Compute essential matrix: E = K^T * F * K
+            E = K.T @ F @ K
 
         # Recover camera poses from essential matrix
         pose1, pose2, mask = self._recover_pose(
