@@ -36,7 +36,7 @@ class PnPSolver:
 
     def __init__(
         self,
-        ransac_threshold: float = 4.0,
+        ransac_threshold: float = 2.5,
         confidence: float = 0.99,
         max_iterations: int = 1000,
         min_inliers: int = 30

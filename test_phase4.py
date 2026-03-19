@@ -63,9 +63,11 @@ def test_phase4(
         return
 
     # Subsample images for large datasets to keep matching tractable
-    # (312 images = 48K pairs, which is way too slow)
-    max_images = max(max_cameras * 2, 20)  # At least 2x cameras, minimum 20
+    # Use 3x the camera count to give the pipeline enough candidates for
+    # registration, with a reasonable minimum and cap to avoid blowup
+    max_images = min(max(max_cameras * 3, 40), len(images))
     if len(images) > max_images:
+        # Uniformly sample around the ring to maintain even coverage
         step = len(images) / max_images
         indices = [int(i * step) for i in range(max_images)]
         images = [images[i] for i in indices]
@@ -200,7 +202,7 @@ def test_phase4(
     ba = BundleAdjuster(
         optimize_intrinsics=False,
         loss_function='huber',
-        max_nfev=50
+        max_nfev=200
     )
 
     optimized_poses, optimized_points, K_opt, final_error = ba.optimize(
