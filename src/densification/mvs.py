@@ -442,9 +442,13 @@ class MVSDensifier:
         """
         Fuse depth maps from multiple views into unified point cloud
 
-        Converts each depth map to 3D points and filters based on
-        multi-view consistency.
+        For each view's depth map, backprojects pixels to 3D, then checks
+        multi-view consistency: a point is kept only if it reprojects into
+        other depth maps and the depths agree within a relative threshold.
         """
+        # Build lookup: img_idx -> DepthMap for cross-view checks
+        depth_map_lookup = {dm.image_idx: dm for dm in depth_maps}
+
         all_points = []
         all_colors = []
         all_confidence = []
@@ -459,11 +463,63 @@ class MVSDensifier:
                 depth_map, image, pose, K
             )
 
-            all_points.append(points_3d)
-            all_colors.append(colors)
-            all_confidence.append(conf)
+            if len(points_3d) == 0:
+                continue
 
-        # Concatenate all points
+            # Multi-view consistency: check each point against other depth maps
+            consistent_count = np.ones(len(points_3d), dtype=int)  # counts self
+
+            other_indices = [i for i in depth_map_lookup if i != img_idx]
+            for other_idx in other_indices:
+                other_pose = camera_poses[other_idx]
+                other_dm = depth_map_lookup[other_idx]
+
+                # Project 3D points into the other camera
+                points_cam = (other_pose.R @ points_3d.T).T + other_pose.t
+                z_depths = points_cam[:, 2]
+
+                # Only consider points in front of the other camera
+                in_front = z_depths > 0
+                if not np.any(in_front):
+                    continue
+
+                # Project to pixel coordinates
+                points_2d_hom = (K @ points_cam.T).T
+                px = points_2d_hom[:, 0] / (z_depths + 1e-8)
+                py = points_2d_hom[:, 1] / (z_depths + 1e-8)
+
+                h, w = other_dm.depth.shape
+                in_bounds = in_front & (px >= 0) & (px < w - 1) & (py >= 0) & (py < h - 1)
+
+                if not np.any(in_bounds):
+                    continue
+
+                # Sample depth from the other depth map at projected locations
+                px_int = np.clip(np.round(px).astype(int), 0, w - 1)
+                py_int = np.clip(np.round(py).astype(int), 0, h - 1)
+
+                other_depth = other_dm.depth[py_int, px_int]
+                other_valid = other_dm.valid_mask[py_int, px_int]
+
+                # Depth consistency: relative difference within threshold
+                depth_diff = np.abs(z_depths - other_depth) / (z_depths + 1e-8)
+                consistent = in_bounds & other_valid & (depth_diff < self.consistency_threshold)
+
+                consistent_count += consistent.astype(int)
+
+            # Keep only points seen consistently in at least min_views views
+            keep_mask = consistent_count >= self.min_views
+
+            if np.any(keep_mask):
+                all_points.append(points_3d[keep_mask])
+                all_colors.append(colors[keep_mask])
+                all_confidence.append(conf[keep_mask])
+
+            n_kept = np.sum(keep_mask)
+            logger.info(f"  View {img_idx}: {n_kept}/{len(points_3d)} points passed "
+                       f"consistency check (>={self.min_views} views)")
+
+        # Concatenate all consistent points
         points_3d = np.vstack(all_points) if all_points else np.empty((0, 3))
         colors = np.vstack(all_colors) if all_colors else np.empty((0, 3))
         confidence = np.concatenate(all_confidence) if all_confidence else np.empty(0)
