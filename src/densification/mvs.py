@@ -380,8 +380,10 @@ class MVSDensifier:
             logger.info(f"Computing depth map for camera {ref_idx} "
                        f"(depth range: [{depth_range[0]:.2f}, {depth_range[1]:.2f}])...")
 
-            # Select source views (all other cameras)
-            src_indices = [i for i in camera_indices if i != ref_idx]
+            # Select best source views: nearby cameras with good baseline angle
+            src_indices = self._select_source_views(
+                ref_idx, ref_pose, camera_indices, camera_poses
+            )
             src_images = [images[i] for i in src_indices]
             src_poses = [camera_poses[i] for i in src_indices]
 
@@ -431,6 +433,90 @@ class MVSDensifier:
         max_depth = np.percentile(depths, 95) * 1.5
 
         return (min_depth, max_depth)
+
+    def _select_source_views(
+        self,
+        ref_idx: int,
+        ref_pose: CameraPose,
+        camera_indices: List[int],
+        camera_poses: Dict[int, CameraPose],
+        max_sources: int = 5,
+        min_angle_deg: float = 5.0,
+        max_angle_deg: float = 30.0
+    ) -> List[int]:
+        """
+        Select best source views for stereo matching with the reference view.
+
+        Picks nearby cameras whose baseline angle is between min_angle_deg and
+        max_angle_deg (enough parallax for depth estimation, but not so much
+        that appearance changes drastically). Returns up to max_sources views,
+        ranked by how close their baseline angle is to the ideal ~10 degrees.
+
+        Args:
+            ref_idx: Reference camera index
+            ref_pose: Reference camera pose
+            camera_indices: All available camera indices
+            camera_poses: All camera poses
+            max_sources: Maximum number of source views to return
+            min_angle_deg: Minimum baseline angle in degrees
+            max_angle_deg: Maximum baseline angle in degrees
+
+        Returns:
+            List of selected source camera indices
+        """
+        ref_center = -ref_pose.R.T @ ref_pose.t
+        # Optical axis of reference camera (third row of R = z-axis in world)
+        ref_viewing_dir = ref_pose.R[2, :]
+
+        ideal_angle = 10.0  # degrees — sweet spot for stereo matching
+        candidates = []
+
+        for idx in camera_indices:
+            if idx == ref_idx:
+                continue
+
+            src_pose = camera_poses[idx]
+            src_center = -src_pose.R.T @ src_pose.t
+
+            # Baseline vector and angle between viewing directions
+            baseline = src_center - ref_center
+            baseline_norm = np.linalg.norm(baseline)
+            if baseline_norm < 1e-8:
+                continue
+
+            src_viewing_dir = src_pose.R[2, :]
+            cos_angle = np.clip(np.dot(ref_viewing_dir, src_viewing_dir), -1.0, 1.0)
+            angle_deg = np.degrees(np.arccos(cos_angle))
+
+            # Filter by angle range
+            if angle_deg < min_angle_deg or angle_deg > max_angle_deg:
+                continue
+
+            # Score: prefer angles close to the ideal
+            score = -abs(angle_deg - ideal_angle)
+            candidates.append((score, idx))
+
+        # Sort by score (best first) and take top max_sources
+        candidates.sort(reverse=True)
+        selected = [idx for _, idx in candidates[:max_sources]]
+
+        # Fallback: if too few views pass the angle filter, relax and pick
+        # the closest cameras by baseline angle regardless of range
+        if len(selected) < 2:
+            all_candidates = []
+            for idx in camera_indices:
+                if idx == ref_idx:
+                    continue
+                src_pose = camera_poses[idx]
+                src_viewing_dir = src_pose.R[2, :]
+                cos_angle = np.clip(np.dot(ref_viewing_dir, src_viewing_dir), -1.0, 1.0)
+                angle_deg = np.degrees(np.arccos(cos_angle))
+                score = -abs(angle_deg - ideal_angle)
+                all_candidates.append((score, idx))
+            all_candidates.sort(reverse=True)
+            selected = [idx for _, idx in all_candidates[:max_sources]]
+
+        return selected
 
     def _fuse_depth_maps(
         self,
