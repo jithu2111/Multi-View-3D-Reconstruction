@@ -143,6 +143,15 @@ class PlaneSweepStereo:
         # Create valid mask based on confidence
         valid_mask = confidence > self.confidence_threshold
 
+        # Mask out dark background pixels — uniform dark regions produce
+        # false matches across views (black matches black everywhere)
+        if len(ref_image.shape) == 3:
+            brightness = np.mean(ref_image.astype(np.float32), axis=2)
+        else:
+            brightness = ref_image.astype(np.float32)
+        foreground_mask = brightness > 30  # pixels brighter than ~12% intensity
+        valid_mask &= foreground_mask
+
         logger.info(f"Depth map computed: "
                    f"{np.sum(valid_mask)} / {h*w} valid pixels "
                    f"({np.sum(valid_mask)/(h*w)*100:.1f}%)")
