@@ -93,14 +93,14 @@ def test_phase4(
     if known_K is not None:
         verifier = RANSACVerifier(
             method='essential',
-            ransac_threshold=1.0,
+            ransac_threshold=0.5,
             min_inliers=50
         )
         verified_matches = verifier.verify_all_matches(all_matches, camera_matrix=known_K)
     else:
         verifier = RANSACVerifier(
             method='fundamental',
-            ransac_threshold=1.0,
+            ransac_threshold=0.5,
             min_inliers=50
         )
         verified_matches = verifier.verify_all_matches(all_matches)
@@ -109,7 +109,7 @@ def test_phase4(
     logger.info("\n[4/9] Two-view initialization...")
 
     initializer = TwoViewInitializer(known_K=known_K)
-    triangulator = Triangulator(min_parallax=1.0, max_reproj_error=4.0)
+    triangulator = Triangulator(min_parallax=1.0, max_reproj_error=2.0)
 
     # Rank all candidate pairs and try them in order until one produces valid points
     candidate_pairs = []
@@ -197,14 +197,31 @@ def test_phase4(
     n_cams, n_pts = reconstructor.get_reconstruction_size()
     logger.info(f"Sparse reconstruction: {n_cams} cameras, {n_pts} points")
 
-    # Bundle Adjustment
+    # Bundle Adjustment (two passes: first cleans up, second refines)
     logger.info("\n[6/9] Running Bundle Adjustment...")
     ba = BundleAdjuster(
         optimize_intrinsics=False,
         loss_function='huber',
-        max_nfev=200
+        ftol=1e-8,
+        max_nfev=500
     )
 
+    # Pass 1: initial optimization
+    optimized_poses, optimized_points, K_opt, error_pass1 = ba.optimize(
+        reconstructor.registered_cameras,
+        reconstructor.points_3d,
+        reconstructor.point_observations,
+        reconstructor.K,
+        fix_first_camera=True
+    )
+    reconstructor.registered_cameras = optimized_poses
+    reconstructor.points_3d = optimized_points
+    logger.info(f"BA pass 1 error: {error_pass1:.3f} pixels")
+
+    # Filter outlier points between passes
+    _filter_outlier_points(reconstructor)
+
+    # Pass 2: refine with cleaner points
     optimized_poses, optimized_points, K_opt, final_error = ba.optimize(
         reconstructor.registered_cameras,
         reconstructor.points_3d,
@@ -212,15 +229,9 @@ def test_phase4(
         reconstructor.K,
         fix_first_camera=True
     )
-
-    logger.info(f"Final reprojection error: {final_error:.3f} pixels")
-
-    # Update reconstructor
     reconstructor.registered_cameras = optimized_poses
     reconstructor.points_3d = optimized_points
-
-    # Filter outlier points after BA (points with high reprojection error drift)
-    _filter_outlier_points(reconstructor)
+    logger.info(f"BA pass 2 error: {final_error:.3f} pixels")
 
     # =========================================================================
     # Step 8: Colorization
