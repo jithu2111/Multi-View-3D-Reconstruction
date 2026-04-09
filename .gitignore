@@ -31,11 +31,17 @@ ENV/
 logs/
 data/output/
 data/benchmarks/
-*.ply
 *.log
 
-# Large datasets (keep structure, ignore data)
-Datasets/
+# Raw PLY meshes — too large for git. web/models/*.glb (Draco-compressed)
+# are the committed runtime assets. Run web/tools/convert_ply_to_glb.py +
+# web/tools/compress_glbs.sh to regenerate GLBs from fresh PLYs.
+*.ply
+
+# Source Middlebury datasets (top-level only — do NOT ignore web/datasets/).
+# The leading slash anchors the rule to the repo root, and macOS's
+# case-insensitive filesystem would otherwise match web/datasets/ too.
+/Datasets/
 
 # Documentation files (keep in repo if needed)
 # Uncomment to ignore PDFs
@@ -62,8 +68,14 @@ src/features/__pycache__/
 src/geometry/__pycache__/
 src/utils/__pycache__/
 
-Temple
-DinoRing
-TempleSparseRing
+# Top-level Phase 4 output directories (anchored to repo root so they
+# don't match nested web/datasets/temple/ etc. on case-insensitive fs).
+/Temple/
+/DinoRing/
+/TempleSparseRing/
 
-colab
+/colab/
+
+# Web frontend — ignore build artifacts but KEEP package-lock.json
+# and web/models/*.glb in the repo.
+web/node_modules/

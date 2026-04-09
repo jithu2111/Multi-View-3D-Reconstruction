@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 const MODELS = {
   dino: {
     title: "Dino Ring",
-    path: "models/dino.ply",
+    path: "models/dino.glb",
     dataset: {
       dir: "datasets/dino",
       label: "Middlebury Dino dataset",
@@ -13,7 +14,7 @@ const MODELS = {
   },
   temple: {
     title: "Temple",
-    path: "models/temple.ply",
+    path: "models/temple.glb",
     dataset: {
       dir: "datasets/temple",
       label: "Middlebury Temple dataset",
@@ -21,7 +22,7 @@ const MODELS = {
   },
   templeSparseRing: {
     title: "Temple Sparse Ring",
-    path: "models/templeSparseRing.ply",
+    path: "models/templeSparseRing.glb",
     dataset: {
       dir: "datasets/templeSparseRing",
       label: "Middlebury Temple Sparse Ring dataset",
@@ -84,17 +85,40 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.screenSpacePanning = true;
 
-// --- Load PLY ---
-const loader = new PLYLoader();
+// --- Load GLB (Draco-compressed) ---
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/");
+dracoLoader.setDecoderConfig({ type: "js" });
+
+const loader = new GLTFLoader();
+loader.setDRACOLoader(dracoLoader);
+
 loader.load(
   modelInfo.path,
-  (geometry) => {
-    geometry.computeVertexNormals();
+  (gltf) => {
+    // Find the first mesh in the glTF scene graph
+    let sourceMesh = null;
+    gltf.scene.traverse((obj) => {
+      if (!sourceMesh && obj.isMesh) sourceMesh = obj;
+    });
 
-    // Use vertex colors if the PLY has them, otherwise fall back to a neutral material
+    if (!sourceMesh) {
+      console.error("[viewer] No mesh found in GLB");
+      loadingText.textContent = "No mesh found in model.";
+      return;
+    }
+
+    const geometry = sourceMesh.geometry;
+
+    // GLB files from the converter may not include normals — recompute so
+    // lighting always works. Keeping existing normals if present.
+    if (!geometry.hasAttribute("normal")) {
+      geometry.computeVertexNormals();
+    }
+
     const hasColors = geometry.hasAttribute("color");
 
-    console.log("[viewer] PLY loaded", {
+    console.log("[viewer] GLB loaded", {
       hasColors,
       vertexCount: geometry.attributes.position.count,
       hasIndex: !!geometry.index,
@@ -102,32 +126,19 @@ loader.load(
       attributes: Object.keys(geometry.attributes),
     });
 
-    // If the PLY has no faces, it's a point cloud — render as points.
-    // Otherwise render as a proper mesh.
-    const isPointCloud = !geometry.index || geometry.index.count === 0;
+    // Replace the glTF-assigned material with our own museum-styled one so
+    // the look matches the old PLY viewer exactly. Draco-decoded vertex
+    // colors are stored as COLOR_0 and picked up by vertexColors: true.
+    const material = new THREE.MeshStandardMaterial({
+      color: hasColors ? 0xffffff : 0xcccccc,
+      vertexColors: hasColors,
+      metalness: 0.0,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+      flatShading: false,
+    });
 
-    let mesh;
-    let pointMaterial = null;
-    if (isPointCloud) {
-      console.warn("[viewer] No faces found in PLY — rendering as point cloud");
-      pointMaterial = new THREE.PointsMaterial({
-        size: 1.0, // will be overridden after scale is computed
-        vertexColors: hasColors,
-        color: hasColors ? 0xffffff : 0xd4af7a,
-        sizeAttenuation: true,
-      });
-      mesh = new THREE.Points(geometry, pointMaterial);
-    } else {
-      const material = new THREE.MeshStandardMaterial({
-        color: hasColors ? 0xffffff : 0xcccccc,
-        vertexColors: hasColors,
-        metalness: 0.0,
-        roughness: 0.85,
-        side: THREE.DoubleSide,
-        flatShading: false,
-      });
-      mesh = new THREE.Mesh(geometry, material);
-    }
+    const mesh = new THREE.Mesh(geometry, material);
 
     // Center + size the mesh robustly. MVS meshes often have stray background
     // geometry that would drag the mean/bbox far from the actual object, so
@@ -190,13 +201,6 @@ loader.load(
     bbox.getSize(bboxSize);
     const actualRadius = Math.max(bboxSize.x, bboxSize.y, bboxSize.z) / 2;
 
-    // Now that we know the scale, set a reasonable point size if rendering points.
-    // Point size is in world units (after scale), so pick something proportional
-    // to the target radius so individual points are visible.
-    if (pointMaterial) {
-      pointMaterial.size = targetRadius * 0.003;
-    }
-
     scene.add(mesh);
 
     // Frame the camera to the actual post-transform bounding sphere.
@@ -237,7 +241,7 @@ loader.load(
     }
   },
   (error) => {
-    console.error("Failed to load PLY:", error);
+    console.error("Failed to load GLB:", error);
     loadingText.textContent = "Failed to load model.";
   }
 );
