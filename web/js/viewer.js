@@ -6,14 +6,26 @@ const MODELS = {
   dino: {
     title: "Dino Ring",
     path: "models/dino.ply",
+    dataset: {
+      dir: "datasets/dino",
+      label: "Middlebury Dino dataset",
+    },
   },
   temple: {
     title: "Temple",
     path: "models/temple.ply",
+    dataset: {
+      dir: "datasets/temple",
+      label: "Middlebury Temple dataset",
+    },
   },
   templeSparseRing: {
     title: "Temple Sparse Ring",
     path: "models/templeSparseRing.ply",
+    dataset: {
+      dir: "datasets/templeSparseRing",
+      label: "Middlebury Temple Sparse Ring dataset",
+    },
   },
 };
 
@@ -229,6 +241,109 @@ loader.load(
     loadingText.textContent = "Failed to load model.";
   }
 );
+
+// --- Dataset modal ---
+const datasetButton = document.getElementById("dataset-button");
+const datasetModal = document.getElementById("dataset-modal");
+const datasetGrid = document.getElementById("dataset-modal-grid");
+const datasetModalTitle = document.getElementById("dataset-modal-title");
+const datasetModalSubtitle = document.getElementById("dataset-modal-subtitle");
+const lightbox = document.getElementById("lightbox");
+const lightboxImg = document.getElementById("lightbox-img");
+const lightboxCaption = document.getElementById("lightbox-caption");
+
+let datasetLoaded = false;
+
+function openModal(el) {
+  el.classList.remove("hidden");
+  el.setAttribute("aria-hidden", "false");
+}
+
+function closeModal(el) {
+  el.classList.add("hidden");
+  el.setAttribute("aria-hidden", "true");
+}
+
+async function loadDataset() {
+  if (datasetLoaded) return;
+  datasetLoaded = true;
+
+  datasetModalTitle.textContent = `${modelInfo.title} — Dataset`;
+  datasetGrid.innerHTML =
+    '<p style="color: var(--fg-dim); font-size: 0.75rem; grid-column: 1 / -1; text-align: center; padding: 20px;">Loading images…</p>';
+
+  try {
+    const manifestUrl = `${modelInfo.dataset.dir}/manifest.json`;
+    const response = await fetch(manifestUrl);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const files = await response.json();
+
+    datasetModalSubtitle.textContent = `${files.length} images · ${modelInfo.dataset.label}`;
+    datasetGrid.innerHTML = "";
+
+    for (const file of files) {
+      const thumb = document.createElement("div");
+      thumb.className = "dataset-thumb";
+      thumb.setAttribute("role", "button");
+      thumb.setAttribute("tabindex", "0");
+
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.src = `${modelInfo.dataset.dir}/${file}`;
+      img.alt = file;
+
+      const label = document.createElement("span");
+      label.className = "dataset-thumb-label";
+      label.textContent = file;
+
+      thumb.appendChild(img);
+      thumb.appendChild(label);
+
+      const openFile = () => {
+        lightboxImg.src = img.src;
+        lightboxImg.alt = file;
+        lightboxCaption.textContent = file;
+        openModal(lightbox);
+      };
+
+      thumb.addEventListener("click", openFile);
+      thumb.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openFile();
+        }
+      });
+
+      datasetGrid.appendChild(thumb);
+    }
+  } catch (err) {
+    console.error("[viewer] Failed to load dataset manifest", err);
+    datasetGrid.innerHTML =
+      '<p style="color: var(--fg-dim); font-size: 0.75rem; grid-column: 1 / -1; text-align: center; padding: 20px;">Failed to load dataset.</p>';
+  }
+}
+
+datasetButton.addEventListener("click", async () => {
+  openModal(datasetModal);
+  await loadDataset();
+});
+
+document.querySelectorAll("[data-close]").forEach((el) => {
+  el.addEventListener("click", () => {
+    const modal = el.closest(".dataset-modal, .lightbox");
+    if (modal) closeModal(modal);
+  });
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!lightbox.classList.contains("hidden")) {
+    closeModal(lightbox);
+  } else if (!datasetModal.classList.contains("hidden")) {
+    closeModal(datasetModal);
+  }
+});
 
 // --- Resize handling ---
 window.addEventListener("resize", () => {

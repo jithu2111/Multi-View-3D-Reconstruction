@@ -23,6 +23,7 @@
       <span>Right-drag: pan</span>
       <span>Scroll: zoom</span>
     </div>
+    <button id="dataset-button" class="dataset-button" type="button">View dataset</button>
   </header>
 
   <div id="viewer-container">
@@ -30,6 +31,27 @@
       <div class="spinner"></div>
       <p id="loading-text">Loading model...</p>
     </div>
+  </div>
+
+  <div id="dataset-modal" class="dataset-modal hidden" aria-hidden="true">
+    <div class="dataset-modal-backdrop" data-close></div>
+    <div class="dataset-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dataset-modal-title">
+      <header class="dataset-modal-header">
+        <div>
+          <h2 id="dataset-modal-title">Dataset</h2>
+          <p id="dataset-modal-subtitle" class="dataset-modal-subtitle"></p>
+        </div>
+        <button class="dataset-modal-close" type="button" data-close aria-label="Close dataset viewer">&times;</button>
+      </header>
+      <div id="dataset-modal-grid" class="dataset-modal-grid"></div>
+    </div>
+  </div>
+
+  <div id="lightbox" class="lightbox hidden" aria-hidden="true">
+    <div class="lightbox-backdrop" data-close></div>
+    <button class="lightbox-close" type="button" data-close aria-label="Close image">&times;</button>
+    <img id="lightbox-img" alt="" />
+    <p id="lightbox-caption" class="lightbox-caption"></p>
   </div>
 
   <script type="module" src="js/viewer.js"></script>
