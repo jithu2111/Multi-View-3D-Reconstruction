@@ -24,6 +24,7 @@
       <span>Scroll: zoom</span>
     </div>
     <button id="dataset-button" class="dataset-button" type="button">View dataset</button>
+    <button id="results-button" class="dataset-button" type="button">Results</button>
   </header>
 
   <div id="viewer-container">
@@ -44,6 +45,20 @@
         <button class="dataset-modal-close" type="button" data-close aria-label="Close dataset viewer">&times;</button>
       </header>
       <div id="dataset-modal-grid" class="dataset-modal-grid"></div>
+    </div>
+  </div>
+
+  <div id="results-modal" class="dataset-modal hidden" aria-hidden="true">
+    <div class="dataset-modal-backdrop" data-close></div>
+    <div class="dataset-modal-panel results-panel" role="dialog" aria-modal="true" aria-labelledby="results-modal-title">
+      <header class="dataset-modal-header">
+        <div>
+          <h2 id="results-modal-title">Results</h2>
+          <p id="results-modal-subtitle" class="dataset-modal-subtitle"></p>
+        </div>
+        <button class="dataset-modal-close" type="button" data-close aria-label="Close results">&times;</button>
+      </header>
+      <div id="results-modal-body" class="results-body"></div>
     </div>
   </div>
 

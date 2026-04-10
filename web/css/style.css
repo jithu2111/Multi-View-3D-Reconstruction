@@ -584,3 +584,65 @@ body.viewer-page {
 .lightbox-close:hover {
   color: var(--accent);
 }
+
+/* ---------- Results modal ---------- */
+
+.results-panel {
+  width: min(560px, 90vw);
+}
+
+.results-body {
+  padding: 22px 28px 28px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.results-table tr {
+  border-bottom: 1px solid var(--border);
+}
+
+.results-table tr:last-child {
+  border-bottom: none;
+}
+
+.results-label {
+  padding: 10px 12px 10px 0;
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.results-value {
+  padding: 10px 0 10px 12px;
+  color: var(--fg);
+  font-size: 0.85rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  vertical-align: baseline;
+}
+
+.results-highlight {
+  background: rgba(212, 175, 122, 0.06);
+}
+
+.results-highlight .results-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.results-highlight .results-value {
+  color: var(--accent);
+  font-size: 1.05rem;
+  font-weight: 600;
+}

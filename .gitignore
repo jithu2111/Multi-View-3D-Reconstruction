@@ -38,10 +38,6 @@ data/benchmarks/
 # web/tools/compress_glbs.sh to regenerate GLBs from fresh PLYs.
 *.ply
 
-# Source Middlebury datasets (top-level only — do NOT ignore web/datasets/).
-# The leading slash anchors the rule to the repo root, and macOS's
-# case-insensitive filesystem would otherwise match web/datasets/ too.
-/Datasets/
 
 # Documentation files (keep in repo if needed)
 # Uncomment to ignore PDFs

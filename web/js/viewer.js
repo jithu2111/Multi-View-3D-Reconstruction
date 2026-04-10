@@ -11,6 +11,21 @@ const MODELS = {
       dir: "datasets/dino",
       label: "Middlebury Dino dataset",
     },
+    results: {
+      cameras: 19,
+      sparsePoints: "1,968",
+      baPass1: "0.681",
+      outliersSparse: "30 (1.5%)",
+      baPass2: "0.681",
+      densePoints: "1,893,318",
+      outliersDense: "48,939 (2.5%)",
+      meshVertices: "1,893,318",
+      meshTriangles: "1,271,348",
+      surfaceMethod: "Ball Pivoting",
+      inputImages: 48,
+      imageSize: "640 \u00d7 480",
+      runDate: "2026-03-19",
+    },
   },
   temple: {
     title: "Temple",
@@ -19,6 +34,21 @@ const MODELS = {
       dir: "datasets/temple",
       label: "Middlebury Temple dataset",
     },
+    results: {
+      cameras: 50,
+      sparsePoints: "7,741",
+      baPass1: "0.658",
+      outliersSparse: "39 (0.5%)",
+      baPass2: "0.641",
+      densePoints: "2,994,741",
+      outliersDense: "63,826 (2.1%)",
+      meshVertices: "2,994,741",
+      meshTriangles: "1,554,430",
+      surfaceMethod: "Ball Pivoting",
+      inputImages: 312,
+      imageSize: "640 \u00d7 480",
+      runDate: "2026-04-09",
+    },
   },
   templeSparseRing: {
     title: "Temple Sparse Ring",
@@ -26,6 +56,21 @@ const MODELS = {
     dataset: {
       dir: "datasets/templeSparseRing",
       label: "Middlebury Temple Sparse Ring dataset",
+    },
+    results: {
+      cameras: 4,
+      sparsePoints: "526",
+      baPass1: "0.268",
+      outliersSparse: "12 (2.3%)",
+      baPass2: "0.241",
+      densePoints: "108,701",
+      outliersDense: "2,561 (2.3%)",
+      meshVertices: "108,701",
+      meshTriangles: "110,698",
+      surfaceMethod: "Ball Pivoting",
+      inputImages: 16,
+      imageSize: "640 \u00d7 480",
+      runDate: "2026-03-20",
     },
   },
 };
@@ -333,6 +378,55 @@ datasetButton.addEventListener("click", async () => {
   await loadDataset();
 });
 
+// --- Results modal ---
+const resultsButton = document.getElementById("results-button");
+const resultsModal = document.getElementById("results-modal");
+const resultsModalTitle = document.getElementById("results-modal-title");
+const resultsModalSubtitle = document.getElementById("results-modal-subtitle");
+const resultsBody = document.getElementById("results-modal-body");
+
+let resultsLoaded = false;
+
+function loadResults() {
+  if (resultsLoaded) return;
+  resultsLoaded = true;
+
+  const r = modelInfo.results;
+  resultsModalTitle.textContent = `${modelInfo.title} — Reconstruction Results`;
+  resultsModalSubtitle.textContent = `${r.inputImages} input images \u00b7 ${r.cameras} cameras registered \u00b7 ${r.imageSize}`;
+
+  const rows = [
+    ["Final reprojection error", `${r.baPass2} px`, true],
+    ["Cameras registered", r.cameras],
+    ["Input images", r.inputImages],
+    ["Image resolution", r.imageSize],
+    ["Sparse points (pre-BA)", r.sparsePoints],
+    ["BA pass 1 error", `${r.baPass1} px`],
+    ["Outliers removed (sparse)", r.outliersSparse],
+    ["BA pass 2 error", `${r.baPass2} px`],
+    ["Dense points (post-MVS)", r.densePoints],
+    ["Outliers removed (dense)", r.outliersDense],
+    ["Mesh vertices", r.meshVertices],
+    ["Mesh triangles", r.meshTriangles],
+    ["Surface method", r.surfaceMethod],
+    ["Run date", r.runDate],
+  ];
+
+  let html = '<table class="results-table">';
+  for (const [label, value, highlight] of rows) {
+    const cls = highlight ? ' class="results-highlight"' : "";
+    html += `<tr${cls}><td class="results-label">${label}</td><td class="results-value">${value}</td></tr>`;
+  }
+  html += "</table>";
+
+  resultsBody.innerHTML = html;
+}
+
+resultsButton.addEventListener("click", () => {
+  openModal(resultsModal);
+  loadResults();
+});
+
 document.querySelectorAll("[data-close]").forEach((el) => {
   el.addEventListener("click", () => {
     const modal = el.closest(".dataset-modal, .lightbox");
@@ -344,6 +438,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!lightbox.classList.contains("hidden")) {
     closeModal(lightbox);
+  } else if (!resultsModal.classList.contains("hidden")) {
+    closeModal(resultsModal);
   } else if (!datasetModal.classList.contains("hidden")) {
     closeModal(datasetModal);
   }
